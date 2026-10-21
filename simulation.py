@@ -111,7 +111,7 @@ class DatabaseSimulator:
     # =========================================================================
     # SCENARIO 1: The N+1 Query Trap vs. Eager JOIN Loading
     # =========================================================================
-    def simulate_n_plus_one(self):
+    def simulate_n_plus_one(self, limit=200):
         print("=" * 65)
         print("SCENARIO 1: The N+1 ORM Trap vs. SQL JOIN")
         print("=" * 65)
@@ -120,7 +120,7 @@ class DatabaseSimulator:
         # BAD: Fetching 200 recent orders, then querying the customer inside a loop
         with self.benchmark("BAD: N+1 Queries in a Loop"):
             orders = cursor.execute(
-                "SELECT id, customer_id, total_cents FROM orders LIMIT 200"
+                f"SELECT id, customer_id, total_cents FROM orders LIMIT {int(limit)}"
             ).fetchall()
             results_bad = []
             for order in orders:
@@ -129,18 +129,24 @@ class DatabaseSimulator:
                     (order["customer_id"],),
                 ).fetchone()
                 results_bad.append((order["id"], customer["name"], order["total_cents"]))
+            bad_query_count = self.query_count
 
         # GOOD: Fetching everything in a single round-trip using an INNER JOIN
         with self.benchmark("GOOD: Single Eager INNER JOIN"):
-            results_good = cursor.execute("""
-                                          SELECT o.id, c.name, o.total_cents
-                                          FROM orders o
-                                                   INNER JOIN customers c ON o.customer_id = c.id
-                                              LIMIT 200
-                                          """).fetchall()
+            results_good = cursor.execute(f"""
+                SELECT o.id, c.name, o.total_cents
+                FROM orders o
+                INNER JOIN customers c ON o.customer_id = c.id
+                LIMIT {int(limit)}
+            """).fetchall()
+            good_query_count = self.query_count
 
         print()
-
+        return {
+            "bad_query_count": bad_query_count,
+            "good_query_count": good_query_count,
+            "row_count": len(results_good),
+        }
     # =========================================================================
     # SCENARIO 2: Full Table Scan vs. B-Tree Indexing
     # =========================================================================
@@ -157,23 +163,25 @@ class DatabaseSimulator:
                 """
 
         # Explain Query Plan BEFORE index
-        plan_before = cursor.execute(f"EXPLAIN QUERY PLAN {query}").fetchone()
-        print(f"  Plan Before Index : {plan_before['detail']}")
+        plan_before = cursor.execute(f"EXPLAIN QUERY PLAN {query}").fetchone()["detail"]
+        print(f"  Plan Before Index : {plan_before}")
         with self.benchmark("Unindexed Query (Full Table Scan)"):
-            for _ in range(50):  # Run 50 times to simulate concurrent API load
+            # Run 50 times to simulate concurrent API load
+            for _ in range(50):
                 cursor.execute(query).fetchall()
 
         # Create a composite B-Tree index
-        cursor.execute("CREATE INDEX idx_orders_status_total ON orders(status, total_cents);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_status_total ON orders(status, total_cents);")
 
         # Explain Query Plan AFTER index
-        plan_after = cursor.execute(f"EXPLAIN QUERY PLAN {query}").fetchone()
-        print(f"  Plan After Index  : {plan_after['detail']}")
+        plan_after = cursor.execute(f"EXPLAIN QUERY PLAN {query}").fetchone()["detail"]
+        print(f"  Plan After Index  : {plan_after}")
         with self.benchmark("Indexed Query (B-Tree Lookup)"):
             for _ in range(50):
                 cursor.execute(query).fetchall()
 
         print()
+        return {"plan_before": plan_before, "plan_after": plan_after}
 
     # =========================================================================
     # SCENARIO 3: ACID Transactions & Atomic Rollbacks
@@ -187,6 +195,7 @@ class DatabaseSimulator:
         initial_stock = cursor.execute(
             "SELECT stock_count FROM products WHERE sku = 'SKU-100'"
         ).fetchone()["stock_count"]
+        initial_orders = cursor.execute("SELECT COUNT(*) AS cnt FROM orders").fetchone()["cnt"]
         print(f"  Initial Keyboard Stock: {initial_stock}")
 
         print("  Attempting checkout where Payment Gateway crashes mid-flight...")
@@ -212,7 +221,15 @@ class DatabaseSimulator:
         final_stock = cursor.execute(
             "SELECT stock_count FROM products WHERE sku = 'SKU-100'"
         ).fetchone()["stock_count"]
+        final_orders = cursor.execute("SELECT COUNT(*) AS cnt FROM orders").fetchone()["cnt"]
         print(f"  Stock After Crash     : {final_stock} (Inventory safely preserved!)\n")
+
+        return {
+            "initial_stock": initial_stock,
+            "final_stock": final_stock,
+            "initial_orders": initial_orders,
+            "final_orders": final_orders,
+        }
 
     # =========================================================================
     # SCENARIO 4: Executive Analytics (CTEs, Soft Deletes & Window Functions)
@@ -251,7 +268,7 @@ class DatabaseSimulator:
                     ) AS tier_rank
                                  FROM customer_lifetime_value
                              )
-                        SELECT tier, tier_rank, name, paid_orders_count, ltv_dollars
+                        SELECT customer_id, tier, tier_rank, name, paid_orders_count, ltv_dollars
                         FROM ranked_customers
                         WHERE tier_rank <= 2
                         ORDER BY tier, tier_rank; \
@@ -265,6 +282,7 @@ class DatabaseSimulator:
                 f"  {r['tier']:<12} | #{r['tier_rank']:<3} | {r['name']:<14} | {r['paid_orders_count']:<6} | ${r['ltv_dollars']:,.2f}"
             )
         print()
+        return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":

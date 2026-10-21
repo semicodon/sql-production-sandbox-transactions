@@ -1,4 +1,4 @@
-# SQL Production Sandbox 
+# SQL Production Sandbox
 
 A zero-dependency Python & SQLite simulation suite that demonstrates how relational databases are actually used, debugged, and optimized in production software engineering environments. This repository simulates four critical real-world workplace scenarios.
 
@@ -10,3 +10,11 @@ No external libraries are required (uses Python's standard `sqlite3` library wit
 git clone [https://github.com/YOUR_USERNAME/sql-production-sandbox.git](https://github.com/YOUR_USERNAME/sql-production-sandbox.git)
 cd sql-production-sandbox
 python simulation.py
+
+## Running the Automated Test Suite
+
+This repository includes an automated `pytest` suite that verifies query counts, `EXPLAIN QUERY PLAN` B-Tree index transitions, ACID rollback integrity, and database `CHECK` constraints.
+
+```bash
+pip install -r requirements.txt
+pytest -v
